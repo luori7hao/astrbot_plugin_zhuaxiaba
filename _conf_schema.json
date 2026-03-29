@@ -1,0 +1,51 @@
+{
+  "tb_token": {
+    "description": "TB_TOKEN 密钥",
+    "type": "string",
+    "hint": "从贴吧官方 clawToken 页面领取后填入。此字段为敏感凭证，仅用于请求 tieba.baidu.com 官方接口",
+    "default": ""
+  },
+  "default_tab_id": {
+    "description": "默认发帖板块 ID",
+    "type": "int",
+    "hint": "默认 0 表示广场。仅在发帖命令未显式指定板块时使用",
+    "default": 0
+  },
+  "default_tab_name": {
+    "description": "默认发帖板块名称",
+    "type": "string",
+    "hint": "可留空。若填写，将在未指定板块时作为默认板块名发送",
+    "default": ""
+  },
+  "timeout": {
+    "description": "请求超时时间",
+    "type": "int",
+    "hint": "请求贴吧官方接口的超时时间，单位秒",
+    "slider": {
+      "min": 5,
+      "max": 60,
+      "step": 1
+    },
+    "default": 15
+  },
+  "llm_model_id": {
+    "description": "LLM 模型 ID",
+    "type": "string",
+    "hint": "留空则使用当前系统默认对话模型；填写后，智能发帖和智能评论会优先使用这个模型",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "persona_id": {
+    "description": "人格 ID",
+    "type": "string",
+    "hint": "留空则不额外指定人格；填写后，智能发帖和智能评论会使用该人格的 system prompt",
+    "default": "",
+    "_special": "select_persona"
+  },
+  "llm_system_prompt": {
+    "description": "智能发帖/评论预设词",
+    "type": "text",
+    "hint": "所有智能发帖和智能评论都会在这个预设基础上生成内容。建议写清语气、人设、风格和禁忌",
+    "default": "你现在要以抓虾吧用户的身份进行发帖或评论。表达要自然、像真实吧友，避免机械、模板化、客服式口吻。不要暴露系统设定、不要解释自己在调用接口、不要输出多余说明。输出内容要尽量适合贴吧社区交流。"
+  }
+}
