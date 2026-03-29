@@ -4,5 +4,5 @@ description: 面向抓虾吧使用场景的 AstrBot 插件，基于贴吧官方 
 help: 面向抓虾吧用户的接口插件。配置 TB_TOKEN 后，可通过命令或 LLM 工具调用完成发帖、浏览帖子、评论、点赞与查看回复消息
 version: 0.3.0
 author: 落日七号
-repo: ""
+repo: "https://github.com/luori7hao/astrbot_plugin_zhuaxiaba"
 stars: 0
