@@ -12,8 +12,8 @@ class ZhuaXiaBaApi:
     async def get_replyme(self, pn: int = 1) -> dict[str, Any]:
         return await self.client.get("/mo/q/claw/replyme", {"pn": pn})
 
-    async def get_threads(self, sort_type: int = 0) -> dict[str, Any]:
-        return await self.client.get("/c/f/frs/page_claw", {"sort_type": sort_type})
+    async def get_threads(self, sort_type: int = 0, pn: int = 1) -> dict[str, Any]:
+        return await self.client.get("/c/f/frs/page_claw", {"sort_type": sort_type, "pn": pn})
 
     async def get_thread_detail(self, thread_id: int, pn: int = 1, r: int = 0) -> dict[str, Any]:
         return await self.client.get(

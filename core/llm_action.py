@@ -22,6 +22,10 @@ class ZhuaXiaBaLLMAction:
                     prompt = getattr(persona, "system_prompt", None) or getattr(persona, "prompt", None)
                     if prompt:
                         return str(prompt).strip()
+
+            default_persona = await self.context.persona_manager.get_default_persona_v3()
+            if default_persona and default_persona.get("prompt"):
+                return str(default_persona["prompt"]).strip()
         except Exception as e:
             logger.warning(f"[ZhuaXiaBaLLM] 获取人格提示词失败：{e}")
         return ""
@@ -31,7 +35,13 @@ class ZhuaXiaBaLLMAction:
         persona_prompt = (persona_prompt or "").strip()
         task_prompt = (task_prompt or "").strip()
         if persona_prompt:
-            return f"{persona_prompt}\n\n---\n\n{task_prompt}"
+            return (
+                f"{persona_prompt}\n\n"
+                "---\n\n"
+                "请严格保留并优先遵循上面的人格设定。下面的内容只是本次发帖/评论任务的补充要求，"
+                "只用于约束主题、格式、长度和输出方式，不覆盖人格中的身份、语气、关系设定与表达风格。\n\n"
+                f"{task_prompt}"
+            )
         return task_prompt
 
     async def _generate_text(self, event, prompt: str, system_prompt: Optional[str] = None) -> str:
@@ -142,19 +152,37 @@ class ZhuaXiaBaLLMAction:
 
         raise RuntimeError("LLM 未按预期生成标题和正文")
 
-    async def generate_reply(self, event, target_text: str, mode: str = "主贴") -> str:
+    async def generate_reply(
+        self,
+        event,
+        target_text: str,
+        mode: str = "主贴",
+        guidance: str | None = None,
+    ) -> str:
         persona_prompt = await self._get_persona_prompt()
+        guidance_text = (guidance or "").strip()
+        if guidance_text:
+            guidance_section = (
+                "6. 额外评论方向只是补充要求，必须先围绕目标内容作出回应，再按这个方向发挥\n"
+                f"7. 这次额外评论方向：{guidance_text}\n"
+            )
+        else:
+            guidance_section = "6. 若没有额外评论方向要求，就在贴合目标内容的前提下自由发挥\n"
         task_prompt = (
             f"{self.cfg.llm_system_prompt}\n\n"
             f"任务：针对抓虾吧的{mode}内容生成一条自然的评论。\n"
             "要求：\n"
             "1. 只输出评论正文\n"
             "2. 不要输出解释或前缀\n"
-            "3. 评论要自然、具体，避免敷衍\n"
-            "4. 字数适中，尽量像贴吧真实互动\n"
+            "3. 评论必须直接回应上面提供的目标内容，不能脱离原帖另起话题\n"
+            "4. 先表明你对目标内容的看法、补充或接话，再决定是否加入个人偏好\n"
+            "5. 说话方式、语气、身份感必须明显体现人格设定，不能写成通用路人腔\n"
+            "6. 如果目标内容信息不足，就基于现有内容谨慎回应，不要编造没看到的细节\n"
+            f"{guidance_section}"
         )
         system_prompt = self._merge_system_prompt(persona_prompt, task_prompt)
-        result = self._clean_text(await self._generate_text(event, prompt=target_text, system_prompt=system_prompt))
+        prompt = f"请只根据下面这段目标内容生成评论，不要忽略其中的观点和上下文：\n\n{target_text}"
+        result = self._clean_text(await self._generate_text(event, prompt=prompt, system_prompt=system_prompt))
         if not result:
             raise RuntimeError("LLM 生成评论为空")
         return result

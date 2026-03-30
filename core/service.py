@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from astrbot.api import logger
+
 from .api import ZhuaXiaBaApi
 from .config import ZhuaXiaBaPluginConfig
 
@@ -62,8 +64,21 @@ class ZhuaXiaBaService:
     @staticmethod
     def _extract_data(resp: dict[str, Any]) -> dict[str, Any]:
         data = resp.get("data")
-        if isinstance(data, dict):
+        if isinstance(data, dict) and data:
             return data
+
+        for key in ("page", "page_data", "result"):
+            value = resp.get(key)
+            if isinstance(value, dict) and value:
+                return value
+
+        fallback = {
+            key: value
+            for key, value in resp.items()
+            if key not in {"errno", "errmsg", "error", "message"}
+        }
+        if fallback:
+            return fallback
         return {}
 
     @staticmethod
@@ -81,6 +96,109 @@ class ZhuaXiaBaService:
             return "（无内容）"
         return value[:limit] + ("..." if len(value) > limit else "")
 
+    @classmethod
+    def _extract_text(cls, value: Any, limit: int = 120) -> str:
+        if value is None:
+            return "（无内容）"
+        if isinstance(value, str):
+            return cls._snippet(value, limit)
+        if isinstance(value, (int, float, bool)):
+            return cls._snippet(value, limit)
+        if isinstance(value, list):
+            parts: list[str] = []
+            for item in value:
+                text = cls._extract_text(item, limit=limit)
+                if text and text != "（无内容）":
+                    parts.append(text)
+            return cls._snippet(" ".join(parts), limit) if parts else "（无内容）"
+        if isinstance(value, dict):
+            preferred_keys = (
+                "content",
+                "text",
+                "body",
+                "rich_text",
+                "text_list",
+                "content_list",
+                "children",
+                "items",
+                "data",
+                "abstract",
+                "desc",
+                "description",
+                "value",
+            )
+            for key in preferred_keys:
+                if key in value:
+                    text = cls._extract_text(value.get(key), limit=limit)
+                    if text and text != "（无内容）":
+                        return text
+
+            parts: list[str] = []
+            for item in value.values():
+                text = cls._extract_text(item, limit=limit)
+                if text and text != "（无内容）":
+                    parts.append(text)
+            return cls._snippet(" ".join(parts), limit) if parts else "（无内容）"
+        return cls._snippet(value, limit)
+
+    @classmethod
+    def _extract_post_text(cls, value: Any, limit: int = 120) -> str:
+        if not isinstance(value, dict):
+            return cls._extract_text(value, limit)
+
+        preferred_keys = (
+            "content",
+            "text",
+            "body",
+            "rich_text",
+            "text_list",
+            "content_list",
+            "post_content",
+            "first_post_content",
+            "reply_content",
+            "quote_content",
+            "target_content",
+            "abstract",
+            "data",
+            "children",
+            "items",
+        )
+        for key in preferred_keys:
+            if key in value:
+                text = cls._extract_text(value.get(key), limit=limit)
+                if text and text != "（无内容）":
+                    return text
+
+        ignored_keys = {
+            "title",
+            "author",
+            "author_name",
+            "user_name",
+            "username",
+            "nickname",
+            "post_id",
+            "pid",
+            "id",
+            "thread_id",
+            "tid",
+            "uid",
+            "time",
+            "create_time",
+            "reply_num",
+            "like_num",
+            "forum_name",
+            "tab_name",
+            "url",
+        }
+        parts: list[str] = []
+        for key, item in value.items():
+            if key in ignored_keys:
+                continue
+            text = cls._extract_post_text(item, limit=limit)
+            if text and text != "（无内容）":
+                parts.append(text)
+        return cls._snippet(" ".join(parts), limit) if parts else "（无内容）"
+
     async def publish_thread(
         self,
         *,
@@ -91,7 +209,8 @@ class ZhuaXiaBaService:
     ) -> dict[str, Any]:
         normalized_title = self._validate_title(title)
         normalized_content = self._validate_content(content)
-        resolved_tab_id, resolved_tab_name = self._resolve_tab(tab_id, tab_name)
+        normalized_tab_id = self._as_int(tab_id, "tab_id") if tab_id is not None and str(tab_id).strip() else None
+        resolved_tab_id, resolved_tab_name = self._resolve_tab(normalized_tab_id, tab_name)
 
         resp = await self.api.add_thread(
             title=normalized_title,
@@ -117,13 +236,15 @@ class ZhuaXiaBaService:
         data = self._extract_data(resp)
         resolved_thread_id = data.get("thread_id") or tid
         post_id = data.get("post_id")
-        if not post_id:
-            raise RuntimeError("贴吧接口返回成功，但缺少 post_id")
-        return {
+        result = {
             "thread_id": resolved_thread_id,
             "post_id": post_id,
-            "url": f"https://tieba.baidu.com/p/{resolved_thread_id}?pid={post_id}",
         }
+        if post_id:
+            result["url"] = f"https://tieba.baidu.com/p/{resolved_thread_id}?pid={post_id}"
+        else:
+            result["url"] = f"https://tieba.baidu.com/p/{resolved_thread_id}"
+        return result
 
     async def reply_post(self, *, post_id: Any, content: str) -> dict[str, Any]:
         normalized_content = self._validate_content(content)
@@ -166,11 +287,17 @@ class ZhuaXiaBaService:
         }
 
     async def list_threads(self, *, sort_type: int = 0) -> list[dict[str, Any]]:
-        resp = await self.api.get_threads(sort_type=sort_type)
+        items = await self.list_threads_page(sort_type=sort_type, pn=1, limit=10)
+        for idx, item in enumerate(items, start=1):
+            item["index"] = idx
+        return items
+
+    async def list_threads_page(self, *, sort_type: int = 0, pn: int = 1, limit: int | None = None) -> list[dict[str, Any]]:
+        resp = await self.api.get_threads(sort_type=sort_type, pn=pn)
         data = self._extract_data(resp)
         raw_items = self._pick_list(data, "thread_list", "list", "page_list")
         result: list[dict[str, Any]] = []
-        for idx, item in enumerate(raw_items[:10], start=1):
+        for item in raw_items:
             if not isinstance(item, dict):
                 continue
             thread_id = item.get("thread_id") or item.get("tid") or item.get("id")
@@ -179,7 +306,6 @@ class ZhuaXiaBaService:
             content = item.get("content") or item.get("abstract") or item.get("text") or ""
             result.append(
                 {
-                    "index": idx,
                     "thread_id": thread_id,
                     "title": str(title),
                     "author": str(author),
@@ -187,31 +313,58 @@ class ZhuaXiaBaService:
                     "url": f"https://tieba.baidu.com/p/{thread_id}" if thread_id else "",
                 }
             )
+            if limit is not None and len(result) >= limit:
+                break
         return result
 
     async def get_thread_detail(self, *, thread_id: Any, pn: int = 1, r: int = 0) -> dict[str, Any]:
         tid = self._as_int(thread_id, "thread_id")
         resp = await self.api.get_thread_detail(tid, pn=pn, r=r)
-        data = self._extract_data(resp)
-        post_list = self._pick_list(data, "post_list", "list")
+        logger.info(
+            "[ZhuaXiaBaService] page_claw raw keys=%s preview=%s",
+            list(resp.keys())[:20],
+            {key: type(value).__name__ for key, value in list(resp.items())[:10]},
+        )
+
+        first_floor = resp.get("first_floor") if isinstance(resp.get("first_floor"), dict) else {}
+        post_list = resp.get("post_list") if isinstance(resp.get("post_list"), list) else []
+        display_forum = resp.get("display_forum") if isinstance(resp.get("display_forum"), dict) else {}
+
         simplified_posts: list[dict[str, Any]] = []
         for item in post_list[:20]:
             if not isinstance(item, dict):
                 continue
             simplified_posts.append(
                 {
-                    "post_id": item.get("post_id") or item.get("id"),
-                    "author": item.get("author_name") or item.get("user_name") or item.get("nickname") or "未知",
-                    "content": self._snippet(item.get("content") or item.get("text") or item.get("body"), 120),
+                    "post_id": item.get("post_id") or item.get("id") or item.get("pid"),
+                    "author": item.get("author_name") or item.get("user_name") or item.get("nickname") or item.get("author") or "未知",
+                    "content": self._extract_post_text(item, 120),
                 }
             )
-        title = data.get("title") or data.get("thread_title") or f"帖子 {tid}"
+
+        title = (
+            first_floor.get("title")
+            or first_floor.get("thread_title")
+            or display_forum.get("title")
+            or f"帖子 {tid}"
+        )
+        thread_content = self._extract_post_text(first_floor, 300)
+        if thread_content == "（无内容）" and simplified_posts:
+            thread_content = simplified_posts[0].get("content") or "（无内容）"
+
+        main_post = {
+            "post_id": first_floor.get("post_id") or first_floor.get("id") or first_floor.get("pid"),
+            "author": first_floor.get("author_name") or first_floor.get("user_name") or first_floor.get("nickname") or first_floor.get("author") or "未知",
+            "content": thread_content,
+        }
         return {
             "thread_id": tid,
             "title": str(title),
+            "content": thread_content,
             "url": f"https://tieba.baidu.com/p/{tid}",
+            "main_post": main_post,
             "posts": simplified_posts,
-            "raw_data": data,
+            "raw_data": resp,
         }
 
     async def list_replyme(self, *, pn: int = 1) -> list[dict[str, Any]]:
